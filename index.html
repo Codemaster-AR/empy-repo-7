@@ -107,7 +107,7 @@
             friction: 0.92,
             bulletSpeed: 18,
             playerDamage: 35,
-            enemyDamage: 12, // Increased damage
+            enemyDamage: 12, 
             extractionRadius: 350,
             healthDropChance: 0.3,
             healthHealAmount: 25
@@ -135,8 +135,10 @@
                 this.velY = 0;
                 this.angle = 0;
                 this.lastShot = 0;
+                this.memoryX = x; // AI Memory of player position
+                this.memoryY = y;
+                this.suppressionTimer = 0;
                 
-                // Smart Health Balancing
                 if (type === 'stalker') this.health = 200;
                 else if (type === 'sentinel') this.health = 400;
                 else this.health = 100;
@@ -279,42 +281,73 @@
             return null;
         }
 
+        // Raycasting for Line of Sight
+        function hasLineOfSight(from, to) {
+            const dx = to.x - from.x;
+            const dy = to.y - from.y;
+            const dist = Math.hypot(dx, dy);
+            const steps = Math.floor(dist / 20);
+            for(let i = 0; i < steps; i++) {
+                const tx = from.x + (dx * (i/steps));
+                const ty = from.y + (dy * (i/steps));
+                if(checkCollision(tx, ty, 5)) return false;
+            }
+            return true;
+        }
+
         function updateAI() {
             if (!player) return;
             const now = Date.now();
+            
             enemies.forEach(e => {
-                const dx = player.x - e.x;
-                const dy = player.y - e.y;
+                const canSeePlayer = hasLineOfSight(e, player);
+                if (canSeePlayer) {
+                    e.memoryX = player.x;
+                    e.memoryY = player.y;
+                    e.suppressionTimer = 60; // AI remembers player for 60 frames
+                } else if (e.suppressionTimer > 0) {
+                    e.suppressionTimer--;
+                }
+
+                const dx = e.memoryX - e.x;
+                const dy = e.memoryY - e.y;
                 const dist = Math.hypot(dx, dy);
 
                 if (e.type === 'stalker') {
-                    let moveAngle = Math.atan2(dy, dx);
-                    // Smarter obstacle avoidance
-                    const checkAngles = [0, 0.4, -0.4, 0.8, -0.8, 1.2, -1.2, Math.PI];
+                    // Predictive Tracking: Aim where player is going
+                    let targetX = e.memoryX + (canSeePlayer ? player.velX * 15 : 0);
+                    let targetY = e.memoryY + (canSeePlayer ? player.velY * 15 : 0);
+                    
+                    let moveAngle = Math.atan2(targetY - e.y, targetX - e.x);
+                    
+                    // Improved Flanking/Obstacle Logic
+                    const checkAngles = [0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5, Math.PI];
                     let bestAngle = moveAngle;
                     
                     for(let offset of checkAngles) {
                         const test = moveAngle + offset;
-                        const tx = e.x + Math.cos(test) * 60;
-                        const ty = e.y + Math.sin(test) * 60;
+                        const tx = e.x + Math.cos(test) * 70;
+                        const ty = e.y + Math.sin(test) * 70;
                         if (!checkCollision(tx, ty, e.radius + 5)) {
                             bestAngle = test;
                             break;
                         }
                     }
 
-                    e.velX += Math.cos(bestAngle) * 0.85;
-                    e.velY += Math.sin(bestAngle) * 0.85;
+                    e.velX += Math.cos(bestAngle) * 0.95;
+                    e.velY += Math.sin(bestAngle) * 0.95;
                     e.angle = Math.atan2(dy, dx);
 
-                    if (dist < 800 && now - e.lastShot > 1400 && Math.random() < 0.1) {
+                    // Only shoot if roughly facing player and has "recent" memory
+                    if (dist < 800 && e.suppressionTimer > 0 && now - e.lastShot > 1200) {
                         bullets.push(new Bullet(e.x, e.y, e.angle, e.color, 'enemy'));
                         e.lastShot = now;
                     }
                 } else if (e.type === 'sentinel') {
-                    if (dist < 600) {
+                    if (dist < 700 && e.suppressionTimer > 0) {
                         e.angle = Math.atan2(dy, dx);
-                        if (now - e.lastShot > 350) { // Faster fire rate
+                        // Sentinels fire faster and suppression fire
+                        if (now - e.lastShot > (canSeePlayer ? 300 : 600)) { 
                             bullets.push(new Bullet(e.x, e.y, e.angle, e.color, 'enemy'));
                             e.lastShot = now;
                         }
@@ -336,7 +369,7 @@
                 e.velY *= CONFIG.friction;
                 
                 const speed = Math.hypot(e.velX, e.velY);
-                const limit = e === player ? CONFIG.maxVelocity : 6.5;
+                const limit = e === player ? CONFIG.maxVelocity : 7.0;
                 if (speed > limit) {
                     e.velX = (e.velX / speed) * limit;
                     e.velY = (e.velY / speed) * limit;
@@ -364,7 +397,6 @@
 
             player.angle = Math.atan2(mouse.y + camera.y - player.y, mouse.x + camera.x - player.x);
 
-            // Pickup collection
             pickups.forEach((p, i) => {
                 if (Math.hypot(p.x - player.x, p.y - player.y) < player.radius + p.radius) {
                     player.health = Math.min(100, player.health + CONFIG.healthHealAmount);
@@ -385,7 +417,6 @@
                             en.health -= CONFIG.playerDamage;
                             bullets.splice(i, 1);
                             if (en.health <= 0) {
-                                // Drop chance
                                 if (Math.random() < CONFIG.healthDropChance) {
                                     pickups.push(new Pickup(en.x, en.y));
                                 }

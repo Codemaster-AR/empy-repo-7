@@ -1,2 +1,1 @@
-# ai.maze.shooter
-AI Maze shooter game
+empty repo
